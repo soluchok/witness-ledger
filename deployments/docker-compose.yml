@@ -1,0 +1,55 @@
+version: '2'
+
+services:
+
+  witness.ledger.mysql:
+    container_name: witness.ledger.mysql
+    image: mysql:latest
+    restart: always
+    environment:
+      - MYSQL_ALLOW_EMPTY_PASSWORD=true
+    volumes:
+      - ./mysql-config:/docker-entrypoint-initdb.d
+    networks:
+      - witness_ledger_net
+    ports:
+      - 3306:3306
+
+  # Tags can be found here
+  # https://console.cloud.google.com/gcr/images/trillian-opensource-ci
+  witness.ledger.trillian.log.server:
+    container_name: witness.ledger.trillian.log.server
+    image: gcr.io/trillian-opensource-ci/log_server:latest 
+    restart: always
+    command:
+      - --mysql_uri=root@tcp(witness.ledger.mysql:3306)/test
+      - --rpc_endpoint=0.0.0.0:8090
+      - --alsologtostderr
+    depends_on:
+      - witness.ledger.mysql
+    networks:
+      - witness_ledger_net
+    ports:
+      - 8090:8090
+
+  # Tags can be found here
+  # https://console.cloud.google.com/gcr/images/trillian-opensource-ci
+  witness.ledger.trillian.log.signer:
+    container_name: witness.ledger.trillian.log.signer
+    image: gcr.io/trillian-opensource-ci/log_signer:latest
+    restart: always
+    command:
+      - --mysql_uri=root@tcp(witness.ledger.mysql:3306)/test
+      - --http_endpoint=0.0.0.0:8091
+      - --force_master=true
+      - --alsologtostderr
+    depends_on:
+      - witness.ledger.mysql
+    networks:
+      - witness_ledger_net
+    ports:
+      - 8091:8091
+
+networks:
+  witness_ledger_net:
+    driver: bridge
