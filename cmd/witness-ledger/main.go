@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"log"
@@ -64,52 +63,72 @@ func newService(client trillian.TrillianLogClient, logID int64) *service {
 
 func (s *service) addPreChainHandler(rw http.ResponseWriter, req *http.Request) {
 	var dest = &bytes.Buffer{}
-	io.Copy(dest, req.Body)
+	_, err := io.Copy(dest, req.Body)
+	if err != nil {
+		log.Printf("[handler] add-pre-chain: copy: %v", err)
 
-	resp, err := s.client.AddSequencedLeaves(context.Background(), &trillian.AddSequencedLeavesRequest{
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := s.client.QueueLeaf(context.Background(), &trillian.QueueLeafRequest{
 		LogId: s.logID,
-		Leaves: []*trillian.LogLeaf{{
-			LeafIndex: s.index,
+		Leaf: &trillian.LogLeaf{
 			LeafValue: dest.Bytes(),
-			//ExtraData: []byte("extra"),
-		}},
+		},
 	})
 	if err != nil {
-		log.Printf("add handler: %v", err)
+		log.Printf("[handler] add-pre-chain: add sequenced leaves: %v", err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	s.index++
-	json.NewEncoder(rw).Encode(resp.Results)
+
+	if err := json.NewEncoder(rw).Encode(resp.QueuedLeaf); err != nil {
+		log.Printf("[handler] add-pre-chain: json encode: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+type GetSTHResponse struct {
+	TreeSize          uint64 `json:"tree_size"`           // Number of certs in the current tree
+	Timestamp         uint64 `json:"timestamp"`           // Time that the tree was created
+	SHA256RootHash    []byte `json:"sha256_root_hash"`    // Root hash of the tree
+	TreeHeadSignature []byte `json:"tree_head_signature"` // Log signature for this STH
 }
 
 func (s *service) getSthHandler(rw http.ResponseWriter, _ *http.Request) {
-	resp, err := s.client.GetLatestSignedLogRoot(context.Background(), &trillian.GetLatestSignedLogRootRequest{
+	sth, err := s.client.GetLatestSignedLogRoot(context.Background(), &trillian.GetLatestSignedLogRootRequest{
 		LogId: s.logID,
 	})
 	if err != nil {
-		log.Printf("get handler: %v", err)
+		log.Printf("[handler] get-sth: get latest signed log root: %v", err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	var currentRoot types.LogRootV1
-	if err := currentRoot.UnmarshalBinary(resp.SignedLogRoot.GetLogRoot()); err != nil {
-		log.Printf("failed to unmarshal root: %v", resp.SignedLogRoot)
+	if err := currentRoot.UnmarshalBinary(sth.SignedLogRoot.GetLogRoot()); err != nil {
+		log.Printf("[handler] get-sth: unmarshal binary: %v", err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	if hashSize := len(currentRoot.RootHash); hashSize != sha256.Size {
-		log.Printf("bad hash size from backend expecting: %d got %d", sha256.Size, hashSize)
-
-		rw.WriteHeader(http.StatusInternalServerError)
-		return
+	// TODO: sign payload (TreeHeadSignature)
+	resp := GetSTHResponse{
+		TreeSize:       currentRoot.TreeSize,
+		SHA256RootHash: currentRoot.RootHash,
+		Timestamp:      uint64(currentRoot.TimestampNanos / 1000 / 1000),
 	}
 
-	json.NewEncoder(rw).Encode(currentRoot)
+	if err := json.NewEncoder(rw).Encode(resp); err != nil {
+		log.Printf("[handler] get-sth: json encode: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+	}
 }

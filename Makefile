@@ -12,7 +12,7 @@ createtree: export GOBIN=$(GOBIN_PATH)
 createtree:
 	@echo "Creating tree for witness-ledger"
 	@go install github.com/google/trillian/cmd/createtree@v1.3.13
-	@$(eval LOG_ID=$(shell $(GOBIN_PATH)/createtree --tree_type=PREORDERED_LOG --admin_server=$(ADMIN_SERVER)))
+	@$(eval LOG_ID=$(shell $(GOBIN_PATH)/createtree --admin_server=$(ADMIN_SERVER)))
 	@echo "Your log id is $(LOG_ID)"
 
 .PHONY: witness-ledger
