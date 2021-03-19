@@ -72,6 +72,11 @@ type getEntriesResponse struct {
 	Entries []leafEntry `json:"entries"`
 }
 
+type getProofByHashResponse struct {
+	LeafIndex int64    `json:"leaf_index"`
+	AuditPath [][]byte `json:"audit_path"`
+}
+
 var errValidation = errors.New("data is not valid")
 
 func main() {
@@ -106,7 +111,8 @@ func main() {
 	router := mux.NewRouter()
 	router.HandleFunc("/ct/v1/add-chain", srv.addChainHandler).Methods(http.MethodPost)
 	router.HandleFunc("/ct/v1/get-sth", srv.getSthHandler).Methods(http.MethodGet)
-	router.HandleFunc("/ct/v1/get-entries", srv.getEntriesHandler).Methods(http.MethodPost)
+	router.HandleFunc("/ct/v1/get-entries", srv.getEntriesHandler).Methods(http.MethodGet)
+	router.HandleFunc("/ct/v1/get-proof-by-hash", srv.getProofByHash).Methods(http.MethodGet)
 
 	if err = http.ListenAndServe(serverAddr, router); err != nil {
 		log.Printf("listen and serve: %v", err)
@@ -273,6 +279,63 @@ func (s *service) getEntriesHandler(rw http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewEncoder(rw).Encode(resp); err != nil {
 		log.Printf("[handler] get-entries: json encode: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+func (s *service) getProofByHash(rw http.ResponseWriter, r *http.Request) {
+	// Hash must be created like this base64.StdEncoding.EncodeToString(rfc6962.DefaultHasher.HashLeaf(leafData)))
+	hash := r.FormValue("hash")
+	if hash == "" {
+		log.Println("[handler] get-proof-by-hash: empty hash")
+
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	leafHash, err := base64.StdEncoding.DecodeString(hash)
+	if err != nil {
+		log.Printf("[handler] get-proof-by-hash: invalid base64 hash: %v", err)
+
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	treeSize, err := strconv.ParseInt(r.FormValue("tree_size"), 10, 64)
+	if err != nil || treeSize < 1 {
+		log.Println("[handler] get-proof-by-hash: missing or invalid tree_size")
+
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	req := trillian.GetInclusionProofByHashRequest{
+		LogId:           s.logID,
+		LeafHash:        leafHash,
+		TreeSize:        treeSize,
+		OrderBySequence: true,
+	}
+
+	rsp, err := s.client.GetInclusionProofByHash(context.Background(), &req)
+	if err != nil {
+		log.Printf("[handler] get-proof-by-hash: get inclusion proof by hash: %s", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+
+		return
+	}
+
+	proofRsp := getProofByHashResponse{
+		LeafIndex: rsp.Proof[0].LeafIndex,
+		AuditPath: rsp.Proof[0].Hashes,
+	}
+
+	if err := json.NewEncoder(rw).Encode(proofRsp); err != nil {
+		log.Printf("[handler] get-proof-by-hash: json encode: %v", err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
 	}
