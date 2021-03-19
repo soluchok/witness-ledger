@@ -3,12 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/google/trillian"
 	"github.com/google/trillian/types"
@@ -17,6 +22,57 @@ import (
 )
 
 const serverAddr = ":7777"
+
+type merkleLeafType uint64
+
+const timestampedEntryLeafType merkleLeafType = 0
+
+type logEntryType uint64
+
+const vcLogEntryType logEntryType = 0
+
+type version uint64
+
+const v1 version = 0
+
+type merkleTreeLeaf struct {
+	Version          version
+	LeafType         merkleLeafType
+	TimestampedEntry *timestampedEntry
+}
+
+type timestampedEntry struct {
+	Timestamp  uint64
+	EntryType  logEntryType
+	VCEntry    []byte
+	Extensions []byte
+}
+
+type addChainResponse struct {
+	SCTVersion version `json:"sct_version"`
+	ID         []byte  `json:"id"`
+	Timestamp  uint64  `json:"timestamp"`
+	Extensions string  `json:"extensions"`
+	Signature  []byte  `json:"signature"`
+}
+
+type getSTHResponse struct {
+	TreeSize          uint64 `json:"tree_size"`
+	Timestamp         uint64 `json:"timestamp"`
+	SHA256RootHash    []byte `json:"sha256_root_hash"`
+	TreeHeadSignature []byte `json:"tree_head_signature"`
+}
+
+type leafEntry struct {
+	LeafInput []byte `json:"leaf_input"`
+	ExtraData []byte `json:"extra_data"`
+}
+
+type getEntriesResponse struct {
+	Entries []leafEntry `json:"entries"`
+}
+
+var errValidation = errors.New("data is not valid")
 
 func main() {
 	logIDstr, ok := os.LookupEnv("LOG_ID")
@@ -38,66 +94,101 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer conn.Close()
+
+	defer func() {
+		if err = conn.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
 
 	srv := newService(trillian.NewTrillianLogClient(conn), logID)
 
 	router := mux.NewRouter()
-	router.HandleFunc("/ct/v1/add-pre-chain", srv.addPreChainHandler).Methods(http.MethodPost)
+	router.HandleFunc("/ct/v1/add-chain", srv.addChainHandler).Methods(http.MethodPost)
 	router.HandleFunc("/ct/v1/get-sth", srv.getSthHandler).Methods(http.MethodGet)
+	router.HandleFunc("/ct/v1/get-entries", srv.getEntriesHandler).Methods(http.MethodPost)
 
 	if err = http.ListenAndServe(serverAddr, router); err != nil {
-		log.Fatal(err)
+		log.Printf("listen and serve: %v", err)
 	}
 }
 
 type service struct {
 	client trillian.TrillianLogClient
 	logID  int64
-	index  int64
 }
 
 func newService(client trillian.TrillianLogClient, logID int64) *service {
 	return &service{client: client, logID: logID}
 }
 
-func (s *service) addPreChainHandler(rw http.ResponseWriter, req *http.Request) {
-	var dest = &bytes.Buffer{}
-	_, err := io.Copy(dest, req.Body)
+func (s *service) addChainHandler(rw http.ResponseWriter, req *http.Request) { //nolint: funlen
+	var dest bytes.Buffer
+
+	_, err := io.Copy(&dest, req.Body)
 	if err != nil {
-		log.Printf("[handler] add-pre-chain: copy: %v", err)
+		log.Printf("[handler] add-chain: copy: %v", err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
+
 		return
 	}
+
+	leaf := merkleTreeLeaf{
+		Version:  v1,
+		LeafType: timestampedEntryLeafType,
+		TimestampedEntry: &timestampedEntry{
+			EntryType:  vcLogEntryType,
+			Timestamp:  uint64(time.Now().UnixNano() / int64(time.Millisecond)),
+			VCEntry:    dest.Bytes(),
+			Extensions: nil,
+		},
+	}
+
+	leafData, err := json.Marshal(leaf)
+	if err != nil {
+		log.Printf("[handler] add-chain: marshal: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+
+		return
+	}
+
+	leafIDHash := sha256.Sum256(dest.Bytes())
 
 	resp, err := s.client.QueueLeaf(context.Background(), &trillian.QueueLeafRequest{
 		LogId: s.logID,
 		Leaf: &trillian.LogLeaf{
-			LeafValue: dest.Bytes(),
+			LeafValue:        leafData,
+			LeafIdentityHash: leafIDHash[:],
 		},
 	})
 	if err != nil {
-		log.Printf("[handler] add-pre-chain: add sequenced leaves: %v", err)
+		log.Printf("[handler] add-chain: add sequenced leaves: %v", err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
+
 		return
 	}
 
-	s.index++
-
-	if err := json.NewEncoder(rw).Encode(resp.QueuedLeaf); err != nil {
-		log.Printf("[handler] add-pre-chain: json encode: %v", err)
+	var loggedLeaf merkleTreeLeaf
+	if err := json.Unmarshal(resp.QueuedLeaf.Leaf.LeafValue, &loggedLeaf); err != nil {
+		log.Printf("[handler] add-chain: unmarshal: %v", err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
 	}
-}
 
-type GetSTHResponse struct {
-	TreeSize          uint64 `json:"tree_size"`           // Number of certs in the current tree
-	Timestamp         uint64 `json:"timestamp"`           // Time that the tree was created
-	SHA256RootHash    []byte `json:"sha256_root_hash"`    // Root hash of the tree
-	TreeHeadSignature []byte `json:"tree_head_signature"` // Log signature for this STH
+	// TODO: add signature
+	result := addChainResponse{
+		SCTVersion: loggedLeaf.Version,
+		Extensions: base64.StdEncoding.EncodeToString(leaf.TimestampedEntry.Extensions),
+		Timestamp:  loggedLeaf.TimestampedEntry.Timestamp,
+	}
+	if err := json.NewEncoder(rw).Encode(result); err != nil {
+		log.Printf("[handler] add-chain: json encode: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+	}
 }
 
 func (s *service) getSthHandler(rw http.ResponseWriter, _ *http.Request) {
@@ -108,6 +199,7 @@ func (s *service) getSthHandler(rw http.ResponseWriter, _ *http.Request) {
 		log.Printf("[handler] get-sth: get latest signed log root: %v", err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
+
 		return
 	}
 
@@ -116,14 +208,16 @@ func (s *service) getSthHandler(rw http.ResponseWriter, _ *http.Request) {
 		log.Printf("[handler] get-sth: unmarshal binary: %v", err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
+
 		return
 	}
 
 	// TODO: sign payload (TreeHeadSignature)
-	resp := GetSTHResponse{
-		TreeSize:       currentRoot.TreeSize,
-		SHA256RootHash: currentRoot.RootHash,
-		Timestamp:      uint64(currentRoot.TimestampNanos / 1000 / 1000),
+	resp := getSTHResponse{
+		TreeSize:          currentRoot.TreeSize,
+		SHA256RootHash:    currentRoot.RootHash,
+		Timestamp:         currentRoot.TimestampNanos / uint64(time.Millisecond),
+		TreeHeadSignature: nil,
 	}
 
 	if err := json.NewEncoder(rw).Encode(resp); err != nil {
@@ -131,4 +225,81 @@ func (s *service) getSthHandler(rw http.ResponseWriter, _ *http.Request) {
 
 		rw.WriteHeader(http.StatusInternalServerError)
 	}
+}
+
+func (s *service) getEntriesHandler(rw http.ResponseWriter, r *http.Request) {
+	start, end, err := parseGetEntriesRange(r, 1000)
+	if err != nil {
+		log.Printf("[handler] get-entries: parse get entries range: %v", err)
+
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	count := end + 1 - start
+	req := trillian.GetLeavesByRangeRequest{
+		LogId:      s.logID,
+		StartIndex: start,
+		Count:      count,
+	}
+
+	rsp, err := s.client.GetLeavesByRange(context.Background(), &req)
+	if err != nil {
+		log.Printf("[handler] get-entries: get leaves by range: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+
+		return
+	}
+
+	var currentRoot types.LogRootV1
+	if err := currentRoot.UnmarshalBinary(rsp.GetSignedLogRoot().GetLogRoot()); err != nil {
+		log.Printf("[handler] get-entries: unmarshal binary: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+
+		return
+	}
+
+	resp := getEntriesResponse{}
+
+	for _, leaf := range rsp.Leaves {
+		resp.Entries = append(resp.Entries, leafEntry{
+			LeafInput: leaf.LeafValue,
+			ExtraData: leaf.ExtraData,
+		})
+	}
+
+	if err := json.NewEncoder(rw).Encode(resp); err != nil {
+		log.Printf("[handler] get-entries: json encode: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+func parseGetEntriesRange(r *http.Request, maxRange int64) (int64, int64, error) {
+	start, err := strconv.ParseInt(r.FormValue("start"), 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse int start value: %w", err)
+	}
+
+	end, err := strconv.ParseInt(r.FormValue("end"), 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse int end value: %w", err)
+	}
+
+	if start < 0 || end < 0 {
+		return 0, 0, fmt.Errorf("%w: start %d and end %d values must be >= 0", errValidation, start, end)
+	}
+
+	if start > end {
+		return 0, 0, fmt.Errorf("%w: start %d and end %d values is not a valid range", errValidation, start, end)
+	}
+
+	if end-start+1 > maxRange {
+		end = start + maxRange - 1
+	}
+
+	return start, end, nil
 }
