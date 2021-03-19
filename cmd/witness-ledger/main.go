@@ -111,8 +111,11 @@ func main() {
 	router := mux.NewRouter()
 	router.HandleFunc("/ct/v1/add-chain", srv.addChainHandler).Methods(http.MethodPost)
 	router.HandleFunc("/ct/v1/get-sth", srv.getSthHandler).Methods(http.MethodGet)
-	router.HandleFunc("/ct/v1/get-entries", srv.getEntriesHandler).Methods(http.MethodGet)
+	router.HandleFunc("/ct/v1/get-sth-consistency", srv.getSthConsistencyHandler).Methods(http.MethodGet)
 	router.HandleFunc("/ct/v1/get-proof-by-hash", srv.getProofByHash).Methods(http.MethodGet)
+	router.HandleFunc("/ct/v1/get-entries", srv.getEntriesHandler).Methods(http.MethodGet)
+	router.HandleFunc("/ct/v1/get-roots", srv.getRootsHandler).Methods(http.MethodGet)
+	router.HandleFunc("/ct/v1/get-entry-and-proof", srv.getEntryAndProofHandler).Methods(http.MethodGet)
 
 	if err = http.ListenAndServe(serverAddr, router); err != nil {
 		log.Printf("listen and serve: %v", err)
@@ -339,6 +342,18 @@ func (s *service) getProofByHash(rw http.ResponseWriter, r *http.Request) {
 
 		rw.WriteHeader(http.StatusInternalServerError)
 	}
+}
+
+func (s *service) getSthConsistencyHandler(rw http.ResponseWriter, r *http.Request) {
+	// TODO: needs to be implemented
+}
+
+func (s *service) getRootsHandler(rw http.ResponseWriter, r *http.Request) {
+	// TODO: needs to be implemented
+}
+
+func (s *service) getEntryAndProofHandler(rw http.ResponseWriter, r *http.Request) {
+	// TODO: needs to be implemented
 }
 
 func parseGetEntriesRange(r *http.Request, maxRange int64) (int64, int64, error) {
