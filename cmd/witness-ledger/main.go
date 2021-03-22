@@ -344,8 +344,44 @@ func (s *service) getProofByHash(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type getSTHConsistencyResponse struct {
+	Consistency [][]byte `json:"consistency"`
+}
+
 func (s *service) getSthConsistencyHandler(rw http.ResponseWriter, r *http.Request) {
-	// TODO: needs to be implemented
+	first, second, err := parseGetSTHConsistencyRange(r)
+	if err != nil {
+		log.Printf("[handler] get-sth-consistency: parse get STH consistency range: %v", err)
+
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	req := trillian.GetConsistencyProofRequest{
+		LogId:          s.logID,
+		FirstTreeSize:  first,
+		SecondTreeSize: second,
+	}
+
+	rsp, err := s.client.GetConsistencyProof(context.Background(), &req)
+	if err != nil {
+		log.Printf("[handler] get-sth-consistency: get consistency proof: %v", err)
+
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	resp := getSTHConsistencyResponse{
+		Consistency: rsp.Proof.GetHashes(),
+	}
+
+	if err := json.NewEncoder(rw).Encode(resp); err != nil {
+		log.Printf("[handler] get-sth-consistency: json encode: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+	}
 }
 
 func (s *service) getRootsHandler(rw http.ResponseWriter, r *http.Request) {
@@ -380,4 +416,36 @@ func parseGetEntriesRange(r *http.Request, maxRange int64) (int64, int64, error)
 	}
 
 	return start, end, nil
+}
+
+func parseGetSTHConsistencyRange(r *http.Request) (int64, int64, error) {
+	firstStr := r.FormValue("first")
+	if firstStr == "" {
+		return 0, 0, fmt.Errorf("%w: parameter first is mandatory", errValidation)
+	}
+
+	secondStr := r.FormValue("second")
+	if secondStr == "" {
+		return 0, 0, fmt.Errorf("%w: parameter second is mandatory", errValidation)
+	}
+
+	first, err := strconv.ParseInt(firstStr, 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("%w: parameter first is not a number", errValidation)
+	}
+
+	second, err := strconv.ParseInt(secondStr, 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("%w: parameter second is not a number", errValidation)
+	}
+
+	if first < 0 || second < 0 {
+		return 0, 0, fmt.Errorf("%w: %d < 0 || %d < 0", errValidation, first, second)
+	}
+
+	if second < first {
+		return 0, 0, fmt.Errorf("%w: %d < %d", errValidation, second, first)
+	}
+
+	return first, second, nil
 }

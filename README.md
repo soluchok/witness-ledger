@@ -135,3 +135,21 @@ Response
    ]
 }
 ```
+
+### get-sth-consistency
+Request
+
+```curl
+curl --location --request GET 'http://localhost:7777/ct/v1/get-sth-consistency?first=1&second=3'
+```
+
+Response
+
+```json
+{
+  "consistency":[
+    "m5Idy7AwJKtmzc7fsKChxtpKiincgiZzKBl1FgL1ioU=",
+    "6Alg41wsFrnXkIe1XCTHd+IL65dpBICnn6nyW8UOZG4="
+  ]
+}
+```
