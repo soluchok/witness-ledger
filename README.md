@@ -153,3 +153,23 @@ Response
   ]
 }
 ```
+
+### get-entry-and-proof
+Request
+
+```curl
+curl --location --request GET 'http://localhost:7777/ct/v1/get-entry-and-proof?leaf_index=1&tree_size=3'
+```
+
+Response
+
+```json
+{
+  "leaf_input":"eyJWZXJzaW9uIjowLCJMZWFmVHlwZSI6MCwiVGltZXN0YW1wZWRFbnRyeSI6eyJUaW1lc3RhbXAiOjE2MTY0OTY0NzM3OTMsIkVudHJ5VHlwZSI6MCwiVkNFbnRyeSI6ImV5SnJaWGtpT2lKMllXd3hJbjA9IiwiRXh0ZW5zaW9ucyI6bnVsbH19",
+  "extra_data":null,
+  "audit_path":[
+    "izKHOFivugzHgKMe6RviJUa8sJDFKtEFhAV4zpG7YVw=",
+    "gd/ySoZdaHr1g1+A7kHZB8p3M9h0OQyJQeE4nu+6L4k="
+  ]
+}
+```

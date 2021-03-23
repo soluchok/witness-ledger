@@ -18,7 +18,16 @@ import (
 	"github.com/google/trillian"
 	"github.com/google/trillian/types"
 	"github.com/gorilla/mux"
+	"github.com/hyperledger/aries-framework-go/pkg/doc/verifiable"
+	"github.com/hyperledger/aries-framework-go/pkg/framework/aries/api/vdr"
+	"github.com/hyperledger/aries-framework-go/pkg/kms"
+	"github.com/hyperledger/aries-framework-go/pkg/kms/webkms"
+	ariesvdr "github.com/hyperledger/aries-framework-go/pkg/vdr"
+	vdrkey "github.com/hyperledger/aries-framework-go/pkg/vdr/key"
 	"google.golang.org/grpc"
+
+	"github.com/soluchok/witness-ledger/pkg/controller/command"
+	"github.com/soluchok/witness-ledger/pkg/controller/rest"
 )
 
 const serverAddr = ":7777"
@@ -44,7 +53,7 @@ type merkleTreeLeaf struct {
 type timestampedEntry struct {
 	Timestamp  uint64
 	EntryType  logEntryType
-	VCEntry    []byte
+	VCEntry    *verifiable.Credential
 	Extensions []byte
 }
 
@@ -77,6 +86,12 @@ type getProofByHashResponse struct {
 	AuditPath [][]byte `json:"audit_path"`
 }
 
+type getEntryAndProofResponse struct {
+	LeafInput []byte   `json:"leaf_input"`
+	ExtraData []byte   `json:"extra_data"`
+	AuditPath [][]byte `json:"audit_path"`
+}
+
 var errValidation = errors.New("data is not valid")
 
 func main() {
@@ -106,12 +121,25 @@ func main() {
 		}
 	}()
 
-	srv := newService(trillian.NewTrillianLogClient(conn), logID)
+	v := ariesvdr.New(
+		&kmsCtx{KeyManager: webkms.New("", nil)},
+		ariesvdr.WithVDR(vdrkey.New()),
+	)
+
+	srv := newService(trillian.NewTrillianLogClient(conn), v, logID)
+	_ = srv
 
 	router := mux.NewRouter()
+
+	cmd, _ := command.New(trillian.NewTrillianLogClient(conn), logID) // nolint: errcheck
+	op, _ := rest.New(cmd)                                            // nolint: errcheck
+
+	for _, handler := range op.GetRESTHandlers() {
+		router.HandleFunc(handler.Path(), handler.Handle()).Methods(handler.Method())
+	}
+
 	router.HandleFunc("/ct/v1/add-chain", srv.addChainHandler).Methods(http.MethodPost)
 	router.HandleFunc("/ct/v1/get-sth", srv.getSthHandler).Methods(http.MethodGet)
-	router.HandleFunc("/ct/v1/get-sth-consistency", srv.getSthConsistencyHandler).Methods(http.MethodGet)
 	router.HandleFunc("/ct/v1/get-proof-by-hash", srv.getProofByHash).Methods(http.MethodGet)
 	router.HandleFunc("/ct/v1/get-entries", srv.getEntriesHandler).Methods(http.MethodGet)
 	router.HandleFunc("/ct/v1/get-roots", srv.getRootsHandler).Methods(http.MethodGet)
@@ -122,13 +150,20 @@ func main() {
 	}
 }
 
+type kmsCtx struct{ kms.KeyManager }
+
+func (c *kmsCtx) KMS() kms.KeyManager {
+	return c.KeyManager
+}
+
 type service struct {
 	client trillian.TrillianLogClient
+	vdr    vdr.Registry
 	logID  int64
 }
 
-func newService(client trillian.TrillianLogClient, logID int64) *service {
-	return &service{client: client, logID: logID}
+func newService(client trillian.TrillianLogClient, v vdr.Registry, logID int64) *service {
+	return &service{client: client, vdr: v, logID: logID}
 }
 
 func (s *service) addChainHandler(rw http.ResponseWriter, req *http.Request) { //nolint: funlen
@@ -143,13 +178,24 @@ func (s *service) addChainHandler(rw http.ResponseWriter, req *http.Request) { /
 		return
 	}
 
+	vc, err := verifiable.ParseCredential(dest.Bytes(), verifiable.WithPublicKeyFetcher(
+		verifiable.NewDIDKeyResolver(s.vdr).PublicKeyFetcher(),
+	), verifiable.WithDisabledProofCheck())
+	if err != nil {
+		log.Printf("[handler] add-chain: parse credential: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+
+		return
+	}
+
 	leaf := merkleTreeLeaf{
 		Version:  v1,
 		LeafType: timestampedEntryLeafType,
 		TimestampedEntry: &timestampedEntry{
 			EntryType:  vcLogEntryType,
 			Timestamp:  uint64(time.Now().UnixNano() / int64(time.Millisecond)),
-			VCEntry:    dest.Bytes(),
+			VCEntry:    vc,
 			Extensions: nil,
 		},
 	}
@@ -288,7 +334,6 @@ func (s *service) getEntriesHandler(rw http.ResponseWriter, r *http.Request) {
 }
 
 func (s *service) getProofByHash(rw http.ResponseWriter, r *http.Request) {
-	// Hash must be created like this base64.StdEncoding.EncodeToString(rfc6962.DefaultHasher.HashLeaf(leafData)))
 	hash := r.FormValue("hash")
 	if hash == "" {
 		log.Println("[handler] get-proof-by-hash: empty hash")
@@ -344,52 +389,46 @@ func (s *service) getProofByHash(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type getSTHConsistencyResponse struct {
-	Consistency [][]byte `json:"consistency"`
-}
-
-func (s *service) getSthConsistencyHandler(rw http.ResponseWriter, r *http.Request) {
-	first, second, err := parseGetSTHConsistencyRange(r)
-	if err != nil {
-		log.Printf("[handler] get-sth-consistency: parse get STH consistency range: %v", err)
-
-		rw.WriteHeader(http.StatusBadRequest)
-
-		return
-	}
-
-	req := trillian.GetConsistencyProofRequest{
-		LogId:          s.logID,
-		FirstTreeSize:  first,
-		SecondTreeSize: second,
-	}
-
-	rsp, err := s.client.GetConsistencyProof(context.Background(), &req)
-	if err != nil {
-		log.Printf("[handler] get-sth-consistency: get consistency proof: %v", err)
-
-		rw.WriteHeader(http.StatusBadRequest)
-
-		return
-	}
-
-	resp := getSTHConsistencyResponse{
-		Consistency: rsp.Proof.GetHashes(),
-	}
-
-	if err := json.NewEncoder(rw).Encode(resp); err != nil {
-		log.Printf("[handler] get-sth-consistency: json encode: %v", err)
-
-		rw.WriteHeader(http.StatusInternalServerError)
-	}
-}
-
 func (s *service) getRootsHandler(rw http.ResponseWriter, r *http.Request) {
 	// TODO: needs to be implemented
 }
 
 func (s *service) getEntryAndProofHandler(rw http.ResponseWriter, r *http.Request) {
-	// TODO: needs to be implemented
+	leafIndex, treeSize, err := parseGetEntryAndProofParams(r)
+	if err != nil {
+		log.Printf("[handler] get-entry-and-proof: parse get entry and proof params: %v", err)
+
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	req := trillian.GetEntryAndProofRequest{
+		LogId:     s.logID,
+		LeafIndex: leafIndex,
+		TreeSize:  treeSize,
+	}
+
+	rsp, err := s.client.GetEntryAndProof(context.Background(), &req)
+	if err != nil {
+		log.Printf("[handler] get-entry-and-proof: get entry and proof: %v", err)
+
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	resp := getEntryAndProofResponse{
+		LeafInput: rsp.Leaf.LeafValue,
+		ExtraData: rsp.Leaf.ExtraData,
+		AuditPath: rsp.Proof.Hashes,
+	}
+
+	if err := json.NewEncoder(rw).Encode(resp); err != nil {
+		log.Printf("[handler] get-entry-and-proof: json encode: %v", err)
+
+		rw.WriteHeader(http.StatusInternalServerError)
+	}
 }
 
 func parseGetEntriesRange(r *http.Request, maxRange int64) (int64, int64, error) {
@@ -418,34 +457,28 @@ func parseGetEntriesRange(r *http.Request, maxRange int64) (int64, int64, error)
 	return start, end, nil
 }
 
-func parseGetSTHConsistencyRange(r *http.Request) (int64, int64, error) {
-	firstStr := r.FormValue("first")
-	if firstStr == "" {
-		return 0, 0, fmt.Errorf("%w: parameter first is mandatory", errValidation)
-	}
-
-	secondStr := r.FormValue("second")
-	if secondStr == "" {
-		return 0, 0, fmt.Errorf("%w: parameter second is mandatory", errValidation)
-	}
-
-	first, err := strconv.ParseInt(firstStr, 10, 64)
+func parseGetEntryAndProofParams(r *http.Request) (int64, int64, error) {
+	leafIndex, err := strconv.ParseInt(r.FormValue("leaf_index"), 10, 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("%w: parameter first is not a number", errValidation)
+		return 0, 0, fmt.Errorf("%w: parameter leaf_index is not a number", errValidation)
 	}
 
-	second, err := strconv.ParseInt(secondStr, 10, 64)
+	treeSize, err := strconv.ParseInt(r.FormValue("tree_size"), 10, 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("%w: parameter second is not a number", errValidation)
+		return 0, 0, fmt.Errorf("%w: parameter tree_size is not a number", errValidation)
 	}
 
-	if first < 0 || second < 0 {
-		return 0, 0, fmt.Errorf("%w: %d < 0 || %d < 0", errValidation, first, second)
+	if treeSize <= 0 {
+		return 0, 0, fmt.Errorf("%w: tree_size must be greater than zero", errValidation)
 	}
 
-	if second < first {
-		return 0, 0, fmt.Errorf("%w: %d < %d", errValidation, second, first)
+	if leafIndex < 0 {
+		return 0, 0, fmt.Errorf("%w: leaf_index must be greater than or equal to zero", errValidation)
 	}
 
-	return first, second, nil
+	if leafIndex >= treeSize {
+		return 0, 0, fmt.Errorf("%w: leaf_index must be less than tree_size", errValidation)
+	}
+
+	return leafIndex, treeSize, nil
 }

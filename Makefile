@@ -15,6 +15,13 @@ createtree:
 	@$(eval LOG_ID=$(shell $(GOBIN_PATH)/createtree --admin_server=$(ADMIN_SERVER)))
 	@echo "Your log id is $(LOG_ID)"
 
+.PHONY: lint
+lint: export GOBIN=$(GOBIN_PATH)
+lint:
+	@echo "Creating tree for witness-ledger"
+	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	$(GOBIN_PATH)/golangci-lint run
+
 .PHONY: witness-ledger
 witness-ledger:
 	@echo "Building witness-ledger"
