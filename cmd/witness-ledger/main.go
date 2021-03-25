@@ -18,6 +18,7 @@ import (
 	"github.com/google/trillian"
 	"github.com/google/trillian/types"
 	"github.com/gorilla/mux"
+	webcrypto "github.com/hyperledger/aries-framework-go/pkg/crypto/webkms"
 	"github.com/hyperledger/aries-framework-go/pkg/doc/verifiable"
 	"github.com/hyperledger/aries-framework-go/pkg/framework/aries/api/vdr"
 	"github.com/hyperledger/aries-framework-go/pkg/kms"
@@ -65,13 +66,6 @@ type addChainResponse struct {
 	Signature  []byte  `json:"signature"`
 }
 
-type getSTHResponse struct {
-	TreeSize          uint64 `json:"tree_size"`
-	Timestamp         uint64 `json:"timestamp"`
-	SHA256RootHash    []byte `json:"sha256_root_hash"`
-	TreeHeadSignature []byte `json:"tree_head_signature"`
-}
-
 type leafEntry struct {
 	LeafInput []byte `json:"leaf_input"`
 	ExtraData []byte `json:"extra_data"`
@@ -94,7 +88,7 @@ type getEntryAndProofResponse struct {
 
 var errValidation = errors.New("data is not valid")
 
-func main() {
+func main() { // nolint: funlen
 	logIDstr, ok := os.LookupEnv("LOG_ID")
 	if !ok && logIDstr == "" {
 		log.Fatal("env variable LOG_ID is not set or its value empty")
@@ -110,6 +104,28 @@ func main() {
 		log.Fatal("env variable LOG_ENDPOINT is not set or its value empty")
 	}
 
+	keystoreURL, _, err := webkms.CreateKeyStore(&http.Client{}, "http://witness.ledger.kms:7878", "sdsdsd", "")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	rmks := webkms.New(keystoreURL, &http.Client{})
+
+	kid, _, err := rmks.Create(kms.ECDSAP256TypeIEEEP1363)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	v := ariesvdr.New(
+		&kmsCtx{KeyManager: webkms.New("", nil)},
+		ariesvdr.WithVDR(vdrkey.New()),
+	)
+
+	wc := webcrypto.New(keystoreURL, &http.Client{})
+
+	_ = wc
+	_ = kid
+
 	conn, err := grpc.Dial(endpoint, grpc.WithInsecure())
 	if err != nil {
 		log.Fatal(err)
@@ -121,25 +137,22 @@ func main() {
 		}
 	}()
 
-	v := ariesvdr.New(
-		&kmsCtx{KeyManager: webkms.New("", nil)},
-		ariesvdr.WithVDR(vdrkey.New()),
-	)
-
 	srv := newService(trillian.NewTrillianLogClient(conn), v, logID)
 	_ = srv
 
 	router := mux.NewRouter()
 
-	cmd, _ := command.New(trillian.NewTrillianLogClient(conn), logID) // nolint: errcheck
-	op, _ := rest.New(cmd)                                            // nolint: errcheck
+	cmd, _ := command.New(trillian.NewTrillianLogClient(conn), rmks, wc, logID, command.Key{ // nolint: errcheck
+		ID:   kid,
+		Type: kms.ECDSAP256TypeIEEEP1363,
+	})
+	op, _ := rest.New(cmd) // nolint: errcheck
 
 	for _, handler := range op.GetRESTHandlers() {
 		router.HandleFunc(handler.Path(), handler.Handle()).Methods(handler.Method())
 	}
 
 	router.HandleFunc("/ct/v1/add-chain", srv.addChainHandler).Methods(http.MethodPost)
-	router.HandleFunc("/ct/v1/get-sth", srv.getSthHandler).Methods(http.MethodGet)
 	router.HandleFunc("/ct/v1/get-proof-by-hash", srv.getProofByHash).Methods(http.MethodGet)
 	router.HandleFunc("/ct/v1/get-entries", srv.getEntriesHandler).Methods(http.MethodGet)
 	router.HandleFunc("/ct/v1/get-roots", srv.getRootsHandler).Methods(http.MethodGet)
@@ -241,42 +254,6 @@ func (s *service) addChainHandler(rw http.ResponseWriter, req *http.Request) { /
 	}
 	if err := json.NewEncoder(rw).Encode(result); err != nil {
 		log.Printf("[handler] add-chain: json encode: %v", err)
-
-		rw.WriteHeader(http.StatusInternalServerError)
-	}
-}
-
-func (s *service) getSthHandler(rw http.ResponseWriter, _ *http.Request) {
-	sth, err := s.client.GetLatestSignedLogRoot(context.Background(), &trillian.GetLatestSignedLogRootRequest{
-		LogId: s.logID,
-	})
-	if err != nil {
-		log.Printf("[handler] get-sth: get latest signed log root: %v", err)
-
-		rw.WriteHeader(http.StatusInternalServerError)
-
-		return
-	}
-
-	var currentRoot types.LogRootV1
-	if err := currentRoot.UnmarshalBinary(sth.SignedLogRoot.GetLogRoot()); err != nil {
-		log.Printf("[handler] get-sth: unmarshal binary: %v", err)
-
-		rw.WriteHeader(http.StatusInternalServerError)
-
-		return
-	}
-
-	// TODO: sign payload (TreeHeadSignature)
-	resp := getSTHResponse{
-		TreeSize:          currentRoot.TreeSize,
-		SHA256RootHash:    currentRoot.RootHash,
-		Timestamp:         currentRoot.TimestampNanos / uint64(time.Millisecond),
-		TreeHeadSignature: nil,
-	}
-
-	if err := json.NewEncoder(rw).Encode(resp); err != nil {
-		log.Printf("[handler] get-sth: json encode: %v", err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
 	}

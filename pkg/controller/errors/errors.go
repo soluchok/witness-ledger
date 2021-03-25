@@ -24,6 +24,11 @@ func (e validationErr) StatusCode() int {
 	return http.StatusBadRequest
 }
 
+// New returns an error that formats as the given text.
+func New(text string) error {
+	return errors.New(text) // nolint: goerr113
+}
+
 // StatusCodeFromError returns status code if an error implements an interface the func supports rpc errors as well.
 func StatusCodeFromError(e error) int {
 	if err, ok := e.(interface{ StatusCode() int }); ok { // nolint: errorlint

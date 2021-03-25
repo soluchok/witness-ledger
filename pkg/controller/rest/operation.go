@@ -59,8 +59,8 @@ func (c *Operation) addVC(w http.ResponseWriter, r *http.Request) {
 	execute(nil, w, r.Body)
 }
 
-func (c *Operation) getSTH(w http.ResponseWriter, r *http.Request) {
-	execute(nil, w, r.Body)
+func (c *Operation) getSTH(w http.ResponseWriter, _ *http.Request) {
+	execute(c.cmd.GetSTH, w, nil)
 }
 
 // GetSTHConsistency retrieves merkle consistency proofs between signed tree heads.
