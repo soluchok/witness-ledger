@@ -45,21 +45,23 @@ func New(cmd *command.Cmd) (*Operation, error) {
 // GetRESTHandlers returns list of all handlers supported by this controller.
 func (c *Operation) GetRESTHandlers() []Handler {
 	return []Handler{
-		NewHTTPHandler(addVCPath, http.MethodPost, c.addVC),
-		NewHTTPHandler(getSTHPath, http.MethodGet, c.getSTH),
+		NewHTTPHandler(addVCPath, http.MethodPost, c.AddVC),
+		NewHTTPHandler(getSTHPath, http.MethodGet, c.GetSTH),
 		NewHTTPHandler(getSTHConsistencyPath, http.MethodGet, c.GetSTHConsistency),
-		NewHTTPHandler(getProofByHashPath, http.MethodGet, c.getProofByHash),
-		NewHTTPHandler(getEntriesPath, http.MethodGet, c.getEntries),
+		NewHTTPHandler(getProofByHashPath, http.MethodGet, c.GetProofByHash),
+		NewHTTPHandler(getEntriesPath, http.MethodGet, c.GetEntries),
 		NewHTTPHandler(getIssuersPath, http.MethodGet, c.getIssuers),
-		NewHTTPHandler(getEntryAndProofPath, http.MethodGet, c.getEntryAndProof),
+		NewHTTPHandler(getEntryAndProofPath, http.MethodGet, c.GetEntryAndProof),
 	}
 }
 
-func (c *Operation) addVC(w http.ResponseWriter, r *http.Request) {
-	execute(nil, w, r.Body)
+// AddVC adds verifiable credential to log.
+func (c *Operation) AddVC(w http.ResponseWriter, r *http.Request) {
+	execute(c.cmd.AddVC, w, r.Body)
 }
 
-func (c *Operation) getSTH(w http.ResponseWriter, _ *http.Request) {
+// GetSTH retrieves latest signed tree head.
+func (c *Operation) GetSTH(w http.ResponseWriter, _ *http.Request) {
 	execute(c.cmd.GetSTH, w, nil)
 }
 
@@ -89,7 +91,7 @@ func (c *Operation) GetSTHConsistency(w http.ResponseWriter, r *http.Request) {
 		SecondTreeSize: second,
 	})
 	if err != nil {
-		sendError(w, fmt.Errorf("marshal: %w", err))
+		sendError(w, fmt.Errorf("marshal GetSTHConsistency request: %w", err))
 
 		return
 	}
@@ -97,20 +99,105 @@ func (c *Operation) GetSTHConsistency(w http.ResponseWriter, r *http.Request) {
 	execute(c.cmd.GetSTHConsistency, w, bytes.NewBuffer(req))
 }
 
-func (c *Operation) getProofByHash(w http.ResponseWriter, r *http.Request) {
-	execute(nil, w, r.Body)
+// GetProofByHash retrieves Merkle Audit proof from Log by leaf hash.
+func (c *Operation) GetProofByHash(w http.ResponseWriter, r *http.Request) {
+	const (
+		hashParamName     = "hash"
+		treeSizeParamName = "tree_size"
+	)
+
+	treeSize, err := strconv.ParseInt(r.FormValue(treeSizeParamName), 10, 64)
+	if err != nil {
+		sendError(w, fmt.Errorf("%w: parameter %q is not a number", errors.ErrValidation, treeSizeParamName))
+
+		return
+	}
+
+	req, err := json.Marshal(command.GetProofByHashRequest{
+		Hash:     r.FormValue(hashParamName),
+		TreeSize: treeSize,
+	})
+	if err != nil {
+		sendError(w, fmt.Errorf("marshal GetProofByHash request: %w", err))
+
+		return
+	}
+
+	execute(c.cmd.GetProofByHash, w, bytes.NewBuffer(req))
 }
 
-func (c *Operation) getEntries(w http.ResponseWriter, r *http.Request) {
-	execute(nil, w, r.Body)
+// GetEntries retrieves entries from log.
+func (c *Operation) GetEntries(w http.ResponseWriter, r *http.Request) {
+	const (
+		startParamName = "start"
+		endParamName   = "end"
+	)
+
+	start, err := strconv.ParseInt(r.FormValue(startParamName), 10, 64)
+	if err != nil {
+		sendError(w, fmt.Errorf("%w: parameter %q is not a number", errors.ErrValidation, startParamName))
+
+		return
+	}
+
+	end, err := strconv.ParseInt(r.FormValue(endParamName), 10, 64)
+	if err != nil {
+		sendError(w, fmt.Errorf("%w: parameter %q is not a number", errors.ErrValidation, endParamName))
+
+		return
+	}
+
+	req, err := json.Marshal(command.GetEntriesRequest{
+		Start: start,
+		End:   end,
+	})
+	if err != nil {
+		sendError(w, fmt.Errorf("marshal GetEntries request: %w", err))
+
+		return
+	}
+
+	execute(c.cmd.GetEntries, w, bytes.NewBuffer(req))
 }
 
 func (c *Operation) getIssuers(w http.ResponseWriter, r *http.Request) {
-	execute(nil, w, r.Body)
+	execute(func(rw io.Writer, req io.Reader) error {
+		return nil
+	}, w, r.Body)
 }
 
-func (c *Operation) getEntryAndProof(w http.ResponseWriter, r *http.Request) {
-	execute(nil, w, r.Body)
+// GetEntryAndProof retrieves entry and merkle audit proof from log.
+func (c *Operation) GetEntryAndProof(w http.ResponseWriter, r *http.Request) {
+	const (
+		leafIndexParamName = "leaf_index"
+		treeSizeParamName  = "tree_size"
+	)
+
+	leafIndex, err := strconv.ParseInt(r.FormValue(leafIndexParamName), 10, 64)
+	if err != nil {
+		sendError(w, fmt.Errorf("%w: parameter %q is not a number", errors.ErrValidation, leafIndexParamName))
+
+		return
+	}
+
+	treeSize, err := strconv.ParseInt(r.FormValue(treeSizeParamName), 10, 64)
+	if err != nil {
+		sendError(w, fmt.Errorf("%w: parameter %q is not a number", errors.ErrValidation, treeSizeParamName))
+
+		return
+	}
+
+	req, err := json.Marshal(command.GetEntryAndProofRequest{
+		LeafIndex: leafIndex,
+		TreeSize:  treeSize,
+	})
+	if err != nil {
+		sendError(w, fmt.Errorf("marshal GetEntryAndProof request: %w", err))
+
+		return
+	}
+
+	execute(c.cmd.GetEntryAndProof, w, bytes.NewBuffer(req))
 }
 
 func execute(exec command.Exec, rw http.ResponseWriter, req io.Reader) {

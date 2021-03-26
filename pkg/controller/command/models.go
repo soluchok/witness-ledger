@@ -3,6 +3,8 @@ package command
 import (
 	"fmt"
 
+	"github.com/hyperledger/aries-framework-go/pkg/doc/verifiable"
+
 	"github.com/soluchok/witness-ledger/pkg/controller/errors"
 )
 
@@ -35,8 +37,118 @@ type SignatureType uint64
 
 // SignatureType constants.
 const (
-	TreeHashSignatureJSONType SignatureType = 100
+	VCTimestampSignatureType SignatureType = 100
+	TreeHeadSignatureType    SignatureType = 101
 )
+
+// MerkleLeafType type definition.
+type MerkleLeafType uint64
+
+// MerkleLeafType constants.
+const (
+	TimestampedEntryLeafType MerkleLeafType = 100
+)
+
+// LogEntryType type definition.
+type LogEntryType uint64
+
+// LogEntryType constants.
+const (
+	VCLogEntryType LogEntryType = 100
+)
+
+// GetEntryAndProofRequest represents the request to get-entry-and-proof.
+type GetEntryAndProofRequest struct {
+	LeafIndex int64
+	TreeSize  int64
+}
+
+// Validate validates data.
+func (r *GetEntryAndProofRequest) Validate() error {
+	if r == nil {
+		return fmt.Errorf("%w: validate on nil value", errors.ErrValidation)
+	}
+
+	if r.TreeSize <= 0 {
+		return fmt.Errorf("%w: tree_size must be greater than zero", errors.ErrValidation)
+	}
+
+	if r.LeafIndex < 0 {
+		return fmt.Errorf("%w: leaf_index must be greater than or equal to zero", errors.ErrValidation)
+	}
+
+	if r.LeafIndex >= r.TreeSize {
+		return fmt.Errorf("%w: leaf_index must be less than tree_size", errors.ErrValidation)
+	}
+
+	return nil
+}
+
+// GetEntryAndProofResponse represents the response to get-entry-and-proof.
+type GetEntryAndProofResponse struct {
+	LeafInput []byte   `json:"leaf_input"`
+	ExtraData []byte   `json:"extra_data"`
+	AuditPath [][]byte `json:"audit_path"`
+}
+
+// GetProofByHashRequest represents the request to the get-proof-by-hash.
+type GetProofByHashRequest struct {
+	Hash     string
+	TreeSize int64
+}
+
+// Validate validates data.
+func (r *GetProofByHashRequest) Validate() error {
+	if r == nil {
+		return fmt.Errorf("%w: validate on nil value", errors.ErrValidation)
+	}
+
+	if r.TreeSize < 1 {
+		return fmt.Errorf("%w: tree_size value must be greater then zero", errors.ErrValidation)
+	}
+
+	return nil
+}
+
+// GetProofByHashResponse represents the response to the get-proof-by-hash.
+type GetProofByHashResponse struct {
+	LeafIndex int64    `json:"leaf_index"`
+	AuditPath [][]byte `json:"audit_path"`
+}
+
+// GetEntriesRequest represents the request to the get-entries.
+type GetEntriesRequest struct {
+	Start int64
+	End   int64
+}
+
+// GetEntriesResponse represents the response to the get-entries.
+type GetEntriesResponse struct {
+	Entries []LeafEntry `json:"entries"`
+}
+
+// LeafEntry represents a leaf in the Log's Merkle tree.
+type LeafEntry struct {
+	LeafInput []byte `json:"leaf_input"`
+	ExtraData []byte `json:"extra_data"`
+}
+
+// Validate validates data.
+func (r *GetEntriesRequest) Validate() error {
+	if r == nil {
+		return fmt.Errorf("%w: validate on nil value", errors.ErrValidation)
+	}
+
+	if r.Start < 0 || r.End < 0 {
+		return fmt.Errorf("%w: start %d and end %d values must be >= 0", errors.ErrValidation, r.Start, r.End)
+	}
+
+	if r.Start > r.End {
+		return fmt.Errorf("%w: start %d and end %d values is not a valid range", errors.ErrValidation, r.Start, r.End)
+	}
+
+	return nil
+}
 
 // GetSTHConsistencyRequest represents the request to the get-sth-consistency.
 type GetSTHConsistencyRequest struct {
@@ -93,4 +205,39 @@ type SignatureAndHashAlgorithm struct {
 type DigitallySigned struct {
 	Algorithm SignatureAndHashAlgorithm
 	Signature []byte
+}
+
+// MerkleTreeLeaf represents the deserialized structure of the hash input for the
+// leaves of a log's Merkle tree.
+type MerkleTreeLeaf struct {
+	Version          Version
+	LeafType         MerkleLeafType
+	TimestampedEntry *TimestampedEntry
+}
+
+// TimestampedEntry is part of the MerkleTreeLeaf structure.
+type TimestampedEntry struct {
+	Timestamp  uint64
+	EntryType  LogEntryType
+	VCEntry    *verifiable.Credential
+	Extensions []byte
+}
+
+// VCTimestampSignature keeps the data over which the signature is created.
+type VCTimestampSignature struct {
+	SCTVersion    Version
+	SignatureType SignatureType
+	Timestamp     uint64
+	EntryType     LogEntryType
+	VCEntry       *verifiable.Credential
+	Extensions    []byte
+}
+
+// AddVCResponse represents the response to add-vc.
+type AddVCResponse struct {
+	SCTVersion Version `json:"sct_version"`
+	ID         []byte  `json:"id"`
+	Timestamp  uint64  `json:"timestamp"`
+	Extensions string  `json:"extensions"`
+	Signature  []byte  `json:"signature"`
 }

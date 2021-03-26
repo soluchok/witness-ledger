@@ -82,7 +82,8 @@ linters:
     - prealloc
     - stylecheck
     - interfacer # linter is deprecated (repository has been archived)
-    - exhaustivestruct #TODO enable
+    - scopelint  # linter is deprecated (repository has been archived)
+    - exhaustivestruct
 
 issues:
   exclude-use-default: false

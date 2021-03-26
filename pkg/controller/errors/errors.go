@@ -9,19 +9,42 @@ import (
 )
 
 // Service errors.
-const (
-	ErrValidation = validationErr("validation failed")
-	ErrInternal   = validationErr("internal error")
+var (
+	ErrValidation = NewBadRequestError(New("validation failed"))
+	ErrBadRequest = NewBadRequestError(New("bad request"))
+	ErrNotFound   = NewNotFoundError(New("not found"))
+	ErrInternal   = NewStatusInternalServerError(New("internal error"))
 )
 
-type validationErr string
-
-func (e validationErr) Error() string {
-	return string(e)
+// NewStatusInternalServerError represents InternalServerError.
+func NewStatusInternalServerError(err error) *StatusErr {
+	return &StatusErr{error: err, status: http.StatusInternalServerError}
 }
 
-func (e validationErr) StatusCode() int {
-	return http.StatusBadRequest
+// NewBadRequestError represents BadRequestError.
+func NewBadRequestError(err error) *StatusErr {
+	return &StatusErr{error: err, status: http.StatusBadRequest}
+}
+
+// NewNotFoundError represents NotFoundError.
+func NewNotFoundError(err error) *StatusErr {
+	return &StatusErr{error: err, status: http.StatusNotFound}
+}
+
+// StatusErr an error with status code.
+type StatusErr struct {
+	error
+	status int
+}
+
+// Unwrap returns the result of calling the Unwrap method on err, if err's.
+func (e *StatusErr) Unwrap() error {
+	return errors.Unwrap(e.error)
+}
+
+// StatusCode returns HTTP status code.
+func (e *StatusErr) StatusCode() int {
+	return e.status
 }
 
 // New returns an error that formats as the given text.
