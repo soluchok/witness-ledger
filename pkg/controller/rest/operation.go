@@ -161,9 +161,7 @@ func (c *Operation) GetEntries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Operation) getIssuers(w http.ResponseWriter, r *http.Request) {
-	execute(func(rw io.Writer, req io.Reader) error {
-		return nil
-	}, w, r.Body)
+	execute(c.cmd.GetIssuers, w, r.Body)
 }
 
 // GetEntryAndProof retrieves entry and merkle audit proof from log.

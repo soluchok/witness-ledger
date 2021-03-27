@@ -26,6 +26,7 @@ const (
 	getEntries        = "getEntries"
 	getProofByHash    = "getProofByHash"
 	getEntryAndProof  = "getEntryAndProof"
+	getIssuers        = "getIssuers"
 	addVC             = "addVC"
 )
 
@@ -98,8 +99,20 @@ func (c *Cmd) GetHandlers() []Handler {
 		NewCmdHandler(getEntries, c.GetEntries),
 		NewCmdHandler(getProofByHash, c.GetProofByHash),
 		NewCmdHandler(getEntryAndProof, c.GetEntryAndProof),
+		NewCmdHandler(getIssuers, c.GetIssuers),
 		NewCmdHandler(addVC, c.AddVC),
 	}
+}
+
+// GetIssuers returns issuers.
+func (c *Cmd) GetIssuers(w io.Writer, r io.Reader) error {
+	issuers := make([]string, 0, len(c.issuers))
+
+	for issuer := range c.issuers {
+		issuers = append(issuers, issuer)
+	}
+
+	return json.NewEncoder(w).Encode(issuers) // nolint: wrapcheck
 }
 
 // AddVC adds verifiable credential to log.
