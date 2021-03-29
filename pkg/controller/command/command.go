@@ -62,6 +62,11 @@ type Config struct {
 
 // New returns commands controller.
 func New(cfg *Config) (*Cmd, error) {
+	_, err := signatureAndHashAlgorithmByKeyType(cfg.Key.Type)
+	if err != nil {
+		return nil, fmt.Errorf("key type %v is not supported", cfg.Key.Type)
+	}
+
 	kh, err := cfg.KMS.Get(cfg.Key.ID)
 	if err != nil {
 		return nil, fmt.Errorf("kms get kh: %w", err)
@@ -500,11 +505,13 @@ func signatureAndHashAlgorithmByKeyType(keyType kms.KeyType) (*SignatureAndHashA
 		return &SignatureAndHashAlgorithm{
 			Hash:      SHA256Hash,
 			Signature: ECDSASignature,
+			Type:      kms.ECDSAP256TypeDER,
 		}, nil
 	case kms.ECDSAP256TypeIEEEP1363:
 		return &SignatureAndHashAlgorithm{
 			Hash:      SHA256Hash,
 			Signature: ECDSASignature,
+			Type:      kms.ECDSAP256TypeIEEEP1363,
 		}, nil
 	default:
 		return nil, fmt.Errorf("%w: key type %v is not supported", errors.ErrInternal, keyType)

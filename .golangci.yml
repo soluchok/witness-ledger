@@ -83,6 +83,7 @@ linters:
     - stylecheck
     - interfacer # linter is deprecated (repository has been archived)
     - scopelint  # linter is deprecated (repository has been archived)
+    - goerr113
     - exhaustivestruct
 
 issues:

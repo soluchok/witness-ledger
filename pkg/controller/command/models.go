@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/hyperledger/aries-framework-go/pkg/doc/verifiable"
+	"github.com/hyperledger/aries-framework-go/pkg/kms"
 
 	"github.com/soluchok/witness-ledger/pkg/controller/errors"
 )
@@ -199,6 +200,7 @@ type TreeHeadSignature struct {
 type SignatureAndHashAlgorithm struct {
 	Hash      HashAlgorithm
 	Signature SignatureAlgorithm
+	Type      kms.KeyType
 }
 
 // DigitallySigned provides information about a signature.

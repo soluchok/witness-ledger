@@ -49,7 +49,7 @@ func (e *StatusErr) StatusCode() int {
 
 // New returns an error that formats as the given text.
 func New(text string) error {
-	return errors.New(text) // nolint: goerr113
+	return errors.New(text)
 }
 
 // StatusCodeFromError returns status code if an error implements an interface the func supports rpc errors as well.
