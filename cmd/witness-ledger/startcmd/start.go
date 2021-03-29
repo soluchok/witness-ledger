@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cenkalti/backoff"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/google/trillian"
 	"github.com/gorilla/mux"
 	"github.com/hyperledger/aries-framework-go-ext/component/storage/couchdb"
